@@ -1,0 +1,329 @@
+---
+title: "Untitled"
+author: "Guangjie Zhang"
+date: "01/04/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(kableExtra)
+seeds <- read.table(
+  "https://archive.ics.uci.edu/ml/machine-learning-databases/00236/seeds_dataset.txt"
+  )
+colnames(seeds) <- c("area", 
+                     "perimeter", 
+                     "compactness", 
+                     "length_of_kernel", 
+                     "width_of_kernel",
+                     "asy_coeff", 
+                     "length_of_kernel_groove", 
+                     "Class")
+summary(seeds)
+cor(dplyr::select(seeds, -Class))
+
+dim(seeds)
+knitr::kable(head(seeds)) %>%
+  kable_styling(latex_options="scale_down")
+
+x <- seeds %>%
+  dplyr::select(-Class) %>%
+  scale()
+
+set.seed(1)
+
+seeds_train_index <- seeds %>%
+  mutate(ind = 1:nrow(seeds)) %>%
+  group_by(Class) %>%
+  mutate(n = n()) %>%
+  sample_frac(size = .75, weight = n) %>%
+  ungroup() %>%
+  pull(ind)
+
+library(nnet)
+class_labels <- pull(seeds, Class) %>% 
+  class.ind() 
+knitr::kable(head(class_labels)) %>%
+  kable_styling(latex_options="scale_down")
+
+seeds_train <- x[seeds_train_index, ]
+train_class <- class_labels[seeds_train_index,]
+seeds_test <- x[-seeds_train_index, ] 
+test_class <- class_labels[-seeds_train_index,]
+
+nn_seeds <- nnet(
+  x = seeds_train, 
+  y = train_class, 
+  size = 4, 
+  decay = 0, 
+  softmax = TRUE,
+  maxit=500
+  )
+
+nn_pred <- predict(nn_seeds, seeds_test, 
+                   type="class")
+
+tab_seeds <- table(slice(
+  seeds, 
+  -seeds_train_index) %>% pull(Class), 
+  nn_pred)
+
+1-sum(diag(tab_seeds))/sum(tab_seeds)
+```
+```{r}
+library(nnet)
+library(MASS)
+
+train_Boston <- sample(
+  1:nrow(Boston), 
+  nrow(Boston)/2
+  )
+
+x <- scale(Boston)
+
+Boston_train <- x[train_Boston, ]
+train_medv <- x[train_Boston, "medv"]
+Boston_test <- x[-train_Boston, ] 
+test_medv <- x[-train_Boston, "medv"]
+
+nn_Boston <- nnet(
+  Boston_train, 
+  train_medv,  
+  size=10, 
+  decay=1, 
+  softmax=FALSE, 
+  maxit=1000,
+  linout=TRUE
+  )
+
+nn_pred <- predict(
+  nn_Boston, 
+  Boston_test,
+  type="raw"
+  )
+
+plot(test_medv, nn_pred)
+
+mean((test_medv - nn_pred)^2)
+
+
+```
+
+```{r}
+library(e1071)
+library(cluster)
+set.seed(1)
+
+data("iris")
+
+Species <- pull(iris, Species)
+
+xy <- dplyr::select(iris, -Species) %>%
+  scale() %>% 
+  data.frame() %>% 
+  mutate(Species = Species) # scale predictors
+
+iris_train_index <- iris %>%
+  mutate(ind = 1:nrow(iris)) %>%
+  group_by(Species) %>%
+  mutate(n = n()) %>%
+  sample_frac(size = .8, weight = n) %>%
+  ungroup() %>%
+  pull(ind)
+
+iris_train <- slice(xy, iris_train_index)
+iris_test <- slice(xy, -iris_train_index)
+class_labels <- pull(xy, Species) %>% 
+  class.ind() 
+
+iris_nnet1 <- tune.nnet(
+  Species~., 
+  data = iris_train, 
+  size = 1:30, 
+  tunecontrol = tune.control(sampling = "cross",cross=5)
+  )
+
+head(summary(iris_nnet1))
+
+plot(iris_nnet1)
+
+library(nnet)
+nn_iris <- nnet(
+  x = dplyr::select(iris_train, -Species),
+  y = class_labels[iris_train_index, ],
+  size = iris_nnet1$best.parameters[1,1], 
+  decay = 0, 
+  softmax = TRUE
+  )
+
+nn_pred <- predict(
+  nn_iris, 
+  dplyr::select(iris_test, -Species), 
+  type="class"
+  )
+
+tab <- table(pull(iris_test, Species), 
+  nn_pred
+  )
+
+tab
+1- sum(diag(tab))/sum(tab)
+
+set.seed(1)
+
+iris_nnet2 <- tune.nnet(
+  Species~., 
+  data = iris_train, 
+  size = 1:20,
+  decay = 0:3,
+  tunecontrol = tune.control(sampling = "cross",cross=5)
+  )
+
+head(summary(iris_nnet2))
+
+plot(iris_nnet2)
+
+nn_iris_d_s <- nnet(
+  x = dplyr::select(iris_train, -Species),
+  y = class_labels[iris_train_index, ], 
+  size = iris_nnet2$best.parameters[1,1], 
+  decay = iris_nnet2$best.parameters[1,2], 
+  softmax = TRUE
+  )
+
+# Compute test error
+nn_pred <- predict(
+  nn_iris_d_s, 
+  dplyr::select(iris_test, -Species), 
+  type="class"
+  )
+```
+```{r}
+library(cluster) 
+library(factoextra) # PCA
+library(pgmm) # coffee data
+data("coffee")
+set.seed(1)
+x <- dplyr::select(coffee, - Variety, - Country) 
+x_scaled <- scale(x)
+kmeans_coffee <- kmeans(x_scaled, 2)
+kmeans_coffee$tot.withinss
+kmeans_coffee <- kmeans(x_scaled, 3)
+kmeans_coffee$tot.withinss
+
+# Let's select K using elbow method
+withiclusterss <- function(K,x){
+  kmeans(x, K)$tot.withinss
+}
+
+K <- 1:8
+
+wcss <- lapply(as.list(K), function(k){
+  withiclusterss(k, x_scaled)
+}) %>% unlist()
+
+ggplot(tibble(K = K, wcss = wcss), aes(x = K, y = wcss)) +
+  geom_point() +
+  geom_line() +
+  xlab("Number of clusters (k)") +
+  ylab("Total within-clusters sum of squares") +
+  scale_x_continuous(breaks=c(seq(1,K[length(K)])))
+
+kmeans_coffee <- kmeans(x_scaled, 2)
+fvPCA <- fviz_cluster(kmeans_coffee, 
+                    x_scaled, 
+                    ellipse.type = "norm",
+                    main = "Plot the results of k-means clustering after PCA")
+
+fvPCA
+
+
+si <- silhouette(kmeans_coffee$cluster, dist(x_scaled))
+head(si)
+#average Silhouette width
+mean(si[, 3])
+plot(si, nmax= 80, cex.names=0.6, main = "")
+
+# Let's select K using average Silhouette width
+avgSilhouette <- function(K,x) {
+  km_cl <- kmeans(x, K)
+  sil <- silhouette(km_cl$cluster, dist(x)) 
+  return(mean(sil[, 3]))
+}
+
+K <- 2:8
+
+avgSil <- numeric()
+for(i in K){
+  avgSil[(i-1)] <- avgSilhouette(i, x_scaled)
+}
+
+ggplot(tibble(K = K, avgSil = avgSil), aes(x = K, y = avgSil)) +
+  geom_point() +
+  geom_line() +
+  xlab("Number of clusters (k)") +
+  ylab("Average silhouette width") +
+  scale_x_continuous(breaks=c(seq(1,K[length(K)])))
+
+kmedoid_coffee <- pam(x_scaled, 2)
+kmedoid_coffee$silinfo$avg.width
+
+avgSil <- lapply(as.list(2:8), function(k){
+  kmedoid_coffee <- pam(x_scaled, k)
+kmedoid_coffee$silinfo$avg.width
+}) %>% unlist()
+
+ggplot(tibble(K = 2:8, avgSil = avgSil), aes(x = K, y = avgSil)) +
+  geom_point() +
+  geom_line() +
+  xlab("Number of clusters (k)") +
+  ylab("Average silhouette width for k-medoid") +
+  scale_x_continuous(breaks=c(seq(1,K[length(K)])))
+```
+```{r}
+library(cluster)
+library(factoextra)
+divisive_votes <- diana(
+  votes.repub, 
+  metric = "euclidean", 
+  stand = TRUE
+  )
+
+plot(divisive_votes)
+
+cut_divisive_votes <- cutree(as.hclust(divisive_votes), k = 2)
+table(cut_divisive_votes) # 8 and 42 group members
+rownames(votes.repub)[cut_divisive_votes == 1]
+# rownames(votes.repub)[cut_divisive_votes == 2]
+
+#make a nice dendrogram
+fviz_dend(
+  divisive_votes, 
+  cex = 0.5,
+  k = 2, # Cut in 2 groups
+  palette = "jco", # Color palette
+  main = "Dendrogram for votes data (divisive clustering)")
+
+x <- votes.repub %>% 
+  scale()
+hc_vote <- hclust(dist(x), "ward.D")
+plot(hc_vote)
+
+
+#make a nice dendrogram
+fviz_dend(
+  hc_vote, 
+  k = 2, # Cut in 2 groups
+  cex = 0.5, 
+  color_labels_by_k = TRUE, 
+  rect = TRUE,
+  main = "Dendrogram for votes data (agglomerative clustering)"
+  )
+
+
+```
+
